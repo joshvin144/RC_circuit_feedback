@@ -18,26 +18,12 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
+#include "main.h"
 
-#include <adc_user.h>
-#include <cmsis_gcc.h>
-#include <main.h>
-#include <pwm_user.h>
-#include <stm32l412xx.h>
-#include <stm32l4xx.h>
-#include <stm32l4xx_hal_adc.h>
-#include <stm32l4xx_hal_adc_ex.h>
-#include <stm32l4xx_hal_cortex.h>
-#include <stm32l4xx_hal_def.h>
-#include <stm32l4xx_hal_dma.h>
-#include <stm32l4xx_hal_flash.h>
-#include <stm32l4xx_hal_pwr_ex.h>
-#include <stm32l4xx_hal_rcc.h>
-#include <stm32l4xx_hal_rcc_ex.h>
-#include <stm32l4xx_hal_tim.h>
-#include <stm32l4xx_hal_tim_ex.h>
-#include <sys/_stdint.h>
-
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "pwm_user.h"
+#include "adc_user.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -142,12 +128,12 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
 	if( data_to_process )
 	{
 		process_data();
 		data_to_process = false;
 	}
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
@@ -229,12 +215,12 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
   hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   hadc1.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -376,6 +362,8 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+
 static void process_data(void)
 {
 	for( uint32_t i = 0; i < ADC_BUFFER_LENGTH; i++ )
@@ -383,6 +371,18 @@ static void process_data(void)
 		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer[i] );
 	}
 }
+
+// Called when first half of buffer is filled
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
+  data_to_process = true;
+}
+
+// Called when buffer is completely filled
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
+  data_to_process = true;
+}
+
+
 /* USER CODE END 4 */
 
 /**
