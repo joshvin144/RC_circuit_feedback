@@ -1,4 +1,6 @@
-Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
+Core/Src/main.o: ../Core/Src/main.c \
+ /Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/Core/Src/modules/adc/adc_user.h \
+ ../Drivers/CMSIS/Include/cmsis_gcc.h ../Core/Inc/main.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal.h \
  ../Core/Inc/stm32l4xx_hal_conf.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_rcc.h \
@@ -29,7 +31,18 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_pwr.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_pwr_ex.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_tim.h \
+ ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_tim_ex.h \
+ /Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/Core/Src/modules/pwm/pwm_user.h \
+ ../Drivers/CMSIS/Device/ST/STM32L4xx/Include/stm32l412xx.h \
+ ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_adc_ex.h \
+ ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_def.h \
+ ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_pwr_ex.h \
+ ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_rcc_ex.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_tim_ex.h
+
+/Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/Core/Src/modules/adc/adc_user.h:
+
+../Drivers/CMSIS/Include/cmsis_gcc.h:
 
 ../Core/Inc/main.h:
 
@@ -92,5 +105,19 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_pwr_ex.h:
 
 ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_tim.h:
+
+../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_tim_ex.h:
+
+/Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/Core/Src/modules/pwm/pwm_user.h:
+
+../Drivers/CMSIS/Device/ST/STM32L4xx/Include/stm32l412xx.h:
+
+../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_adc_ex.h:
+
+../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_def.h:
+
+../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_pwr_ex.h:
+
+../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_rcc_ex.h:
 
 ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_tim_ex.h:

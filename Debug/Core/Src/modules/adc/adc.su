@@ -1,0 +1,2 @@
+adc.c:15:6:adc_init_adc_module	4	static
+adc.c:23:7:adc_calculate_voltage_from_output_code	24	static

@@ -18,23 +18,36 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
-#include "main.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
+#include <adc_user.h>
+#include <cmsis_gcc.h>
+#include <main.h>
+#include <pwm_user.h>
+#include <stm32l412xx.h>
+#include <stm32l4xx.h>
+#include <stm32l4xx_hal_adc.h>
+#include <stm32l4xx_hal_adc_ex.h>
+#include <stm32l4xx_hal_cortex.h>
+#include <stm32l4xx_hal_def.h>
+#include <stm32l4xx_hal_dma.h>
+#include <stm32l4xx_hal_flash.h>
+#include <stm32l4xx_hal_pwr_ex.h>
+#include <stm32l4xx_hal_rcc.h>
+#include <stm32l4xx_hal_rcc_ex.h>
+#include <stm32l4xx_hal_tim.h>
+#include <stm32l4xx_hal_tim_ex.h>
+#include <sys/_stdint.h>
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#define PWM_CLOCK_FREQUENCY_HZ 4000000.0f
-#define PWM_PULSE_FREQUENCY_HZ 0.1f // Reset every 10 seconds
-#define PWM_ARRX 65535.0f
-#define PWM_DUTY_CYCLE 0.50f // 90% Duty cycle
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -44,21 +57,28 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
 TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN PV */
+
+uint16_t adc1_buffer[ADC_BUFFER_LENGTH] = {0};
+// If an RTOS was implemented, this may be replaced with a Semaphore
+bool data_to_process = false;
+// A parallel array to store the processed ADC data
+float adc1_voltage[ADC_BUFFER_LENGTH] = {0};
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
-static uint32_t pwm_calculate_prescaler(float clock_frequency_Hz, float pulse_frequency_Hz);
-static uint32_t pwm_calculate_CCRx(float duty_cycle);
+static void process_data(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -94,12 +114,28 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
+
+  // Initialize data structures in the ADC module
+  adc_init_adc_module();
+
+  // Start DMA
+  // The DMA will fill this buffer in the background
+  // When the buffer fills, the DMA will fire an interrupt
+  // In the ISR, it is time to read out the buffer
+  // In the ISR, set a flag that there is data to process
+  // In the main, process the data
+  // Once processed, clear the flag
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc1_buffer, ADC_BUFFER_LENGTH);
+
+  // Start PWM
   HAL_StatusTypeDef status = HAL_TIM_PWM_Start( &htim1, TIM_CHANNEL_1 );
   assert( HAL_OK == status );
-  TIM1->CCR1 = pwm_calculate_CCRx( PWM_DUTY_CYCLE );
+  TIM1->CCR1 = pwm_calculate_CCRx( PWM_DUTY_CYCLE, PWM_ARRX );
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -107,6 +143,11 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+	if( data_to_process )
+	{
+		process_data();
+		data_to_process = false;
+	}
 
     /* USER CODE BEGIN 3 */
   }
@@ -243,7 +284,7 @@ static void MX_TIM1_Init(void)
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
-  uint32_t prescaler = pwm_calculate_prescaler(PWM_CLOCK_FREQUENCY_HZ, PWM_PULSE_FREQUENCY_HZ);
+  uint32_t prescaler = pwm_calculate_prescaler( PWM_CLOCK_FREQUENCY_HZ, PWM_PULSE_FREQUENCY_HZ, PWM_ARRX );
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = prescaler;
@@ -306,6 +347,22 @@ static void MX_TIM1_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -319,26 +376,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-/*
-* Calculate Prescaler (PSC)
-* F_PWM = ( F_CLK )/( ( ARR + 1 ) * ( PSC + 1 ) )
-* ( ARR + 1 ) * ( PSC + 1 ) = ( F_CLK ) / ( F_PWM )
-* PSC = ( ( F_CLK ) / ( ( F_PWM ) * ( ARR + 1 ) ) ) - 1
-*/
-static uint32_t pwm_calculate_prescaler(float clock_frequency_Hz, float pulse_frequency_Hz)
+static void process_data(void)
 {
-	return floor( ( clock_frequency_Hz ) / ( ( pulse_frequency_Hz ) * ( PWM_ARRX + 1 ) ) ) - 1u;
-}
-
-/*
-* Calculate CCRx
-* DUTY_CYCLE = ( CCRx ) / ( ARRx )
-* CCRx = ( DUTY_CYCLE ) * ( ARRx )
-*/
-static uint32_t pwm_calculate_CCRx(float duty_cycle)
-{
-	return floor( duty_cycle * PWM_ARRX );
+	for( uint32_t i = 0; i < ADC_BUFFER_LENGTH; i++ )
+	{
+		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer[i] );
+	}
 }
 /* USER CODE END 4 */
 

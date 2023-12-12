@@ -1,0 +1,2 @@
+pwm.c:18:10:pwm_calculate_prescaler	24	static
+pwm.c:29:10:pwm_calculate_CCRx	16	static

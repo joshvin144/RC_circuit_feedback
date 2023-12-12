@@ -16,5 +16,5 @@ S_DEPS += \
 
 # Each subdirectory must supply rules for building sources it contributes
 Core/Startup/startup_stm32l412kbtx.o: ../Core/Startup/startup_stm32l412kbtx.s Core/Startup/subdir.mk
-	arm-none-eabi-gcc -mcpu=cortex-m4 -g3 -c -x assembler-with-cpp -MMD -MP -MF"Core/Startup/startup_stm32l412kbtx.d" -MT"$@" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "$@" "$<"
+	arm-none-eabi-gcc -mcpu=cortex-m4 -g3 -c -I"/Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/Core/Src/modules/pwm" -I"/Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/Core/Src/modules/adc" -x assembler-with-cpp -MMD -MP -MF"Core/Startup/startup_stm32l412kbtx.d" -MT"$@" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "$@" "$<"
 
