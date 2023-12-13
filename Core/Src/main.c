@@ -34,6 +34,17 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+#define USE_FULL_ASSERT
+
+#define DEFAULT_TIMEOUT ( 10000u )
+#define USART2_TIMEOUT DEFAULT_TIMEOUT
+
+#define MESSAGE_LENGTH ( 6u )
+#define MESSAGE_QUEUE_LENGTH ( 256u )
+
+#define ADC_BUFFER_DOWNSAMPLED_LENGTH ( 256u )
+#define DOWNSAMPLE_FACTOR ( 16u )
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -47,13 +58,20 @@ DMA_HandleTypeDef hdma_adc1;
 
 TIM_HandleTypeDef htim1;
 
+UART_HandleTypeDef huart2;
+
 /* USER CODE BEGIN PV */
 
+static char message_queue[MESSAGE_QUEUE_LENGTH][MESSAGE_LENGTH] = {0};
+static uint32_t message_queue_length = 0u;
+static bool queue_is_full = false;
+static bool queue_is_loaded = false;
+
 uint16_t adc1_buffer[ADC_BUFFER_LENGTH] = {0};
+uint16_t adc1_buffer_downsampled[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0};
+float adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0};
 // If an RTOS was implemented, this may be replaced with a Semaphore
 bool data_to_process = false;
-// A parallel array to store the processed ADC data
-float adc1_voltage[ADC_BUFFER_LENGTH] = {0};
 
 /* USER CODE END PV */
 
@@ -63,8 +81,29 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-static void process_data(void);
+
+
+/*
+ * HUART2
+ */
+
+static void prepare_message(char* message, uint32_t message_length, float data);
+static void queue_message(char* message, uint32_t message_length);
+static HAL_StatusTypeDef dispatch_message_from_huart2(char* message, uint32_t message_length);
+static void empty_queue(void);
+
+
+/*
+ * ADC1
+ */
+
+static void downsample_adc1_buffer(void);
+static void process_adc_output_codes(void);
+static void convert_data_to_messages_and_queue(void);
+
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,6 +142,7 @@ int main(void)
   MX_DMA_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
   // Initialize data structures in the ADC module
@@ -130,8 +170,18 @@ int main(void)
   {
 	if( data_to_process )
 	{
-		process_data();
+		downsample_adc1_buffer();
+		process_adc_output_codes();
 		data_to_process = false;
+
+		convert_data_to_messages_and_queue();
+		queue_is_loaded = true;
+	}
+
+	if( queue_is_loaded )
+	{
+		empty_queue();
+		queue_is_loaded = false;
 	}
     /* USER CODE END WHILE */
 
@@ -181,7 +231,8 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_ADC;
+  PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -333,6 +384,41 @@ static void MX_TIM1_Init(void)
 }
 
 /**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -364,18 +450,105 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 
-static void process_data(void)
+/*
+ * HUART2
+ */
+
+
+static void prepare_message(char* message, uint32_t message_length, float data)
 {
-	for( uint32_t i = 0; i < ADC_BUFFER_LENGTH; i++ )
+	// Only accept values below 10.0f
+	float dividend = data / ( 10.0f );
+	assert( dividend < 10.0f );
+
+	// Copy the data
+	int sprintf_return = sprintf(message, "%.3f,", data);
+	assert(sprintf_return == message_length);
+}
+
+
+static void queue_message(char* message, uint32_t message_length)
+{
+	/*
+	 * TODO: Currently, there is a mismatch in timing between adding messages to the queue and emptying the queue
+	 * If the queue is not emptied before adding more messages, a Hard Fault will occur.
+	 * Therefore, queue_is_full was added.
+	 * If the queue_is_full, another message cannot be added.
+	 * queue_is_full will be reset the next time that the queue is emptied.
+	 */
+	if( !queue_is_full )
 	{
-		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer[i] );
+		memcpy(message_queue[message_queue_length], message, message_length);
+		message_queue_length++;
+	}
+
+	if( message_queue_length == ( MESSAGE_QUEUE_LENGTH - 1 ) )
+	{
+		queue_is_full = true;
 	}
 }
+
+
+static HAL_StatusTypeDef dispatch_message_from_huart2(char* message, uint32_t message_length)
+{
+	HAL_StatusTypeDef status = HAL_OK;
+	status = HAL_UART_Transmit(&huart2, (uint8_t*) message, message_length, USART2_TIMEOUT);
+	return status;
+}
+
+
+static void empty_queue(void)
+{
+	HAL_StatusTypeDef status = HAL_OK;
+	for( uint32_t i = 0u; i < message_queue_length; i++ )
+	{
+		status = dispatch_message_from_huart2(message_queue[i], MESSAGE_LENGTH);
+		assert( HAL_OK == status );
+	}
+	message_queue_length = 0u;
+	queue_is_full = false;
+}
+
+
+/*
+ * ADC1
+ */
+
+
+static void downsample_adc1_buffer(void)
+{
+	for( uint32_t i = 0u; i < ADC_BUFFER_LENGTH; i += DOWNSAMPLE_FACTOR )
+	{
+		adc1_buffer_downsampled[i/DOWNSAMPLE_FACTOR] = adc1_buffer[i];
+	}
+}
+
+
+static void process_adc_output_codes(void)
+{
+	for( uint32_t i = 0u; i < ADC_BUFFER_DOWNSAMPLED_LENGTH; i++ )
+	{
+		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer_downsampled[i] );
+	}
+}
+
+
+static void convert_data_to_messages_and_queue(void)
+{
+	char message[MESSAGE_LENGTH];
+	for( uint32_t i = 0u; i < MESSAGE_QUEUE_LENGTH; i++ )
+	{
+		prepare_message(message, MESSAGE_LENGTH, adc1_voltage[i]);
+		queue_message(message, MESSAGE_LENGTH);
+	}
+}
+
 
 // Called when first half of buffer is filled
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
   data_to_process = true;
 }
+
 
 // Called when buffer is completely filled
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
@@ -413,6 +586,7 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  while(true);
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

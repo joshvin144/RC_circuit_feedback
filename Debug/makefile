@@ -64,7 +64,7 @@ main-build: RC_circuit_feedback.elf secondary-outputs
 
 # Tool invocations
 RC_circuit_feedback.elf: $(OBJS) $(USER_OBJS) /Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/STM32L412KBTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "RC_circuit_feedback.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/STM32L412KBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="RC_circuit_feedback.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+	arm-none-eabi-gcc -o "RC_circuit_feedback.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/Users/jvincent/STM32CubeIDE/workspace_1.6.1/RC_circuit_feedback/STM32L412KBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="RC_circuit_feedback.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
