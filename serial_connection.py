@@ -10,8 +10,8 @@ DEFAULT_PORT = "/dev/cu.usbmodem103"
 DEFAULT_BAUDRATE = 115200 # Bits per second
 DEFAULT_TIMEOUT = 20 # Seconds
 DEFAULT_FNAME = "temp.csv"
-DEFAULT_BATCH_SIZE = 256 # Bytes
-DEFAULT_NBATCHES = 1000
+DEFAULT_BATCH_SIZE = 258 # Bytes
+DEFAULT_NBATCHES = 1032
 
 
 class SerialConnection(serial.Serial):
