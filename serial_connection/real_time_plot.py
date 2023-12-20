@@ -11,7 +11,7 @@ config_get_from_sample_queue
 
 DEFAULT_REFRESH_RATE = 100
 X_MIN = 0
-X_MAX = 1000
+X_MAX = 1032
 Y_MIN = 0
 Y_MAX = 5
 
