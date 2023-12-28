@@ -46,6 +46,9 @@
 #define ADC_BUFFER_DOWNSAMPLED_LENGTH ( 256u )
 #define DOWNSAMPLE_FACTOR ( 16u )
 
+#define ERROR_LOG_LENGTH ( 256u )
+#define DERIVATIVE_LOG_LENGTH ( 256u )
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -73,6 +76,28 @@ uint16_t adc1_buffer_downsampled[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0};
 float adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0.0f};
 // If an RTOS was implemented, this may be replaced with a Semaphore
 bool data_to_process = false;
+
+float adjusted_duty_cycle = 0.0f;
+// The voltage to achieve across the capacitor
+float set_point_voltage = 3.6f;
+float sample_voltage = 0.0f;
+
+// Error
+float error = 0.0f;
+float error_log[ERROR_LOG_LENGTH] = {0.0f};
+uint32_t error_log_idx = 0u;
+float error_log_is_full = false;
+
+// More error terms
+float integral = 0.0f;
+float derivative_log[DERIVATIVE_LOG_LENGTH] = {0.0f};
+float derivative = 0.0f;
+float composite = 0.0f;
+
+// Weights
+float k_integral = 100.0f;
+float k_derivative = 100.0f;
+float k_proportion = 100.0f;
 
 /* USER CODE END PV */
 
@@ -103,6 +128,12 @@ static void empty_queue(void);
 static void downsample_adc1_buffer(void);
 static void process_adc_output_codes(void);
 static void convert_data_to_messages_and_queue(void);
+
+/*
+ * Feedback
+ */
+static void add_to_error_log(float);
+static float calculate_duty_cycle_from_error(float);
 
 
 /* USER CODE END PFP */
@@ -161,7 +192,9 @@ int main(void)
   // Start PWM
   HAL_StatusTypeDef status = HAL_TIM_PWM_Start( &htim1, TIM_CHANNEL_1 );
   assert( HAL_OK == status );
+#ifdef TEST_MODE
   TIM1->CCR1 = pwm_calculate_CCRx( PWM_DUTY_CYCLE, PWM_ARRX );
+#endif
 
   /* USER CODE END 2 */
 
@@ -175,6 +208,18 @@ int main(void)
 		downsample_adc1_buffer();
 		process_adc_output_codes();
 		data_to_process = false;
+
+#ifndef TEST_MODE
+		// Feedback
+		sample_voltage = adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH - 1u];
+		error = ( set_point_voltage - sample_voltage );
+		add_to_error_log( error );
+		integral = math_helpers_trapezoid_approximation( error_log, error_log_idx );
+		derivative = derivative_log[DERIVATIVE_LOG_LENGTH - 1u];
+		composite = ( k_proportion * error ) + ( k_integral * integral ) - ( k_derivative * derivative );
+		adjusted_duty_cycle = calculate_duty_cycle_from_error( composite );
+		TIM1->CCR1 = pwm_calculate_CCRx( adjusted_duty_cycle, PWM_ARRX );
+#endif
 
 		// Data transfer
 		convert_data_to_messages_and_queue();
@@ -556,6 +601,36 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
 // Called when buffer is completely filled
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
   data_to_process = true;
+}
+
+
+/*
+ * Feedback
+ */
+static void add_to_error_log( float error )
+{
+	if( !error_log_is_full )
+	{
+	    error_log[error_log_idx] = error;
+	    error_log_idx++;
+	}
+	else
+	{
+		error_log_idx = 0u;
+		error_log_is_full = false;
+	}
+
+	if ( ERROR_LOG_LENGTH == error_log_idx )
+	{
+		error_log_is_full = true;
+	}
+}
+
+
+static float calculate_duty_cycle_from_error( float error )
+{
+	assert( PWM_ARRX >= error );
+	return error / PWM_ARRX;
 }
 
 
