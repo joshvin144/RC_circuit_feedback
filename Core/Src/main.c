@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "pwm_user.h"
 #include "adc_user.h"
+#include "math_helpers_user.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,7 +70,7 @@ static bool queue_is_loaded = false;
 
 uint16_t adc1_buffer[ADC_BUFFER_LENGTH] = {0};
 uint16_t adc1_buffer_downsampled[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0};
-float adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0};
+float adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0.0f};
 // If an RTOS was implemented, this may be replaced with a Semaphore
 bool data_to_process = false;
 
@@ -170,10 +171,12 @@ int main(void)
   {
 	if( data_to_process )
 	{
+		// Sampling
 		downsample_adc1_buffer();
 		process_adc_output_codes();
 		data_to_process = false;
 
+		// Data transfer
 		convert_data_to_messages_and_queue();
 		queue_is_loaded = true;
 	}
