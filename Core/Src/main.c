@@ -35,7 +35,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define TEST_MODE
+//#define TEST_MODE
 #define USE_FULL_ASSERT
 
 #define SAMPLE_PERIOD_MS ( 10u )
@@ -49,6 +49,7 @@
 
 #define ERROR_LOG_LENGTH ( 256u )
 #define DERIVATIVE_LOG_LENGTH ( 256u )
+#define MAX_ERROR ( 921.6f )
 
 /* USER CODE END PD */
 
@@ -100,9 +101,9 @@ float derivative = 0.0f;
 float composite = 0.0f;
 
 // Weights
-float k_integral = 100.0f;
-float k_derivative = 100.0f;
-float k_proportion = 100.0f;
+float k_integral = 1.0f;
+float k_derivative = 1.0f;
+float k_proportion = 1.0f;
 
 /* USER CODE END PV */
 
@@ -204,18 +205,6 @@ int main(void)
 		process_adc_output_codes();
 		data_to_process = false;
 
-#ifndef TEST_MODE
-		// Feedback
-		sample_voltage = adc1_voltage[ADC_BUFFER_LENGTH - 1u];
-		error = ( set_point_voltage - sample_voltage );
-		add_to_error_log( error );
-		integral = math_helpers_trapezoid_approximation( error_log, error_log_idx );
-		derivative = derivative_log[DERIVATIVE_LOG_LENGTH - 1u];
-		composite = ( k_proportion * error ) + ( k_integral * integral ) - ( k_derivative * derivative );
-		adjusted_duty_cycle = calculate_duty_cycle_from_error( composite );
-		TIM1->CCR1 = pwm_calculate_CCRx( adjusted_duty_cycle, PWM_ARRX );
-#endif
-
 		// Data transfer
 		convert_data_to_messages_and_queue();
 		queue_is_loaded = true;
@@ -227,8 +216,29 @@ int main(void)
 		queue_is_loaded = false;
 	}
 
+	// Poll the ADC
 	uint16_t conversion_result = poll_adc();
 	add_to_adc_buffer( conversion_result );
+
+#ifndef TEST_MODE
+	// Translate the ADC output code to voltage
+	sample_voltage = adc_calculate_voltage_from_output_code( conversion_result );
+
+	// Calculate the residual error term
+	error = ( set_point_voltage - sample_voltage );
+	add_to_error_log( error );
+
+	// Compute the other error terms
+	integral += math_helpers_trapezoid_approximation( error_log, error_log_idx );
+	derivative = derivative_log[DERIVATIVE_LOG_LENGTH - 1u];
+	composite = ( k_proportion * error ) + ( k_integral * integral ) - ( k_derivative * derivative );
+
+	// Calculate and set duty cycle from the composite error term
+	adjusted_duty_cycle = calculate_duty_cycle_from_error( composite );
+	TIM1->CCR1 = pwm_calculate_CCRx( adjusted_duty_cycle, PWM_ARRX );
+#endif
+
+
 	HAL_Delay( SAMPLE_PERIOD_MS );
     /* USER CODE END WHILE */
 
@@ -618,8 +628,8 @@ static void add_to_error_log( float error )
 
 static float calculate_duty_cycle_from_error( float error )
 {
-	assert( PWM_ARRX >= error );
-	return error / PWM_ARRX;
+	assert( MAX_ERROR >= error );
+	return ( error / MAX_ERROR );
 }
 
 
