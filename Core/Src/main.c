@@ -38,18 +38,19 @@
 //#define TEST_MODE
 #define USE_FULL_ASSERT
 
-#define SAMPLE_PERIOD_MS ( 10u )
+#define SAMPLE_PERIOD_MS ( 1u )
 #define ADC_TIMEOUT_MS ( 1u )
 
 #define DEFAULT_TIMEOUT_MS ( 10000u )
 #define USART2_TIMEOUT_MS DEFAULT_TIMEOUT_MS
 
 #define MESSAGE_LENGTH ( 6u )
-#define MESSAGE_QUEUE_LENGTH ( 256u )
+#define MESSAGE_QUEUE_LENGTH ADC_BUFFER_LENGTH
 
-#define ERROR_LOG_LENGTH ( 256u )
-#define DERIVATIVE_LOG_LENGTH ( 256u )
+#define ERROR_LOG_LENGTH ADC_BUFFER_LENGTH
+#define DERIVATIVE_LOG_LENGTH ( ADC_BUFFER_LENGTH - 1u )
 #define MAX_ERROR ( 921.6f )
+#define TOLERANCE ( 0.1f )
 
 /* USER CODE END PD */
 
@@ -91,18 +92,18 @@ float sample_voltage = 0.0f;
 // Error
 float error = 0.0f;
 float error_log[ERROR_LOG_LENGTH] = {0.0f};
-uint32_t error_log_idx = 0u;
-float error_log_is_full = false;
 
 // More error terms
 float integral = 0.0f;
-float derivative_log[DERIVATIVE_LOG_LENGTH] = {0.0f};
 float derivative = 0.0f;
 float composite = 0.0f;
 
+// Derivative specific
+float derivative_log[DERIVATIVE_LOG_LENGTH] = {0.0f};
+
 // Weights
 float k_integral = 1.0f;
-float k_derivative = 1.0f;
+float k_derivative = 3.0f;
 float k_proportion = 1.0f;
 
 /* USER CODE END PV */
@@ -138,7 +139,7 @@ static void convert_data_to_messages_and_queue(void);
 /*
  * Feedback
  */
-static void add_to_error_log(float);
+static void calculate_error_from_set_point(float*, uint32_t, float*, uint32_t, float);
 static float calculate_duty_cycle_from_error(float);
 
 
@@ -205,6 +206,26 @@ int main(void)
 		process_adc_output_codes();
 		data_to_process = false;
 
+#ifndef TEST_MODE
+		// Calculate the residual error term
+		calculate_error_from_set_point( error_log, ERROR_LOG_LENGTH, adc1_voltage, ADC_BUFFER_LENGTH, set_point_voltage );
+
+		// Compute the integral term
+		integral = math_helpers_trapezoid_approximation( error_log, ERROR_LOG_LENGTH );
+
+		// Compute the derivative term
+		math_helpers_derivative( derivative_log, DERIVATIVE_LOG_LENGTH, adc1_voltage, ADC_BUFFER_LENGTH );
+
+		// Assign intermediary variables
+		error = error_log[ERROR_LOG_LENGTH - 1u];
+		derivative = derivative_log[DERIVATIVE_LOG_LENGTH - 1u];
+		composite = ( k_proportion * error ) + ( k_integral * integral ) - ( k_derivative * derivative );
+
+		// Calculate and set duty cycle from the composite error term
+		adjusted_duty_cycle = calculate_duty_cycle_from_error( composite );
+		TIM1->CCR1 = pwm_calculate_CCRx( adjusted_duty_cycle, PWM_ARRX );
+#endif
+
 		// Data transfer
 		convert_data_to_messages_and_queue();
 		queue_is_loaded = true;
@@ -220,25 +241,7 @@ int main(void)
 	uint16_t conversion_result = poll_adc();
 	add_to_adc_buffer( conversion_result );
 
-#ifndef TEST_MODE
-	// Translate the ADC output code to voltage
-	sample_voltage = adc_calculate_voltage_from_output_code( conversion_result );
-
-	// Calculate the residual error term
-	error = ( set_point_voltage - sample_voltage );
-	add_to_error_log( error );
-
-	// Compute the other error terms
-	integral += math_helpers_trapezoid_approximation( error_log, error_log_idx );
-	derivative = derivative_log[DERIVATIVE_LOG_LENGTH - 1u];
-	composite = ( k_proportion * error ) + ( k_integral * integral ) - ( k_derivative * derivative );
-
-	// Calculate and set duty cycle from the composite error term
-	adjusted_duty_cycle = calculate_duty_cycle_from_error( composite );
-	TIM1->CCR1 = pwm_calculate_CCRx( adjusted_duty_cycle, PWM_ARRX );
-#endif
-
-
+	// Wait until the next sample time
 	HAL_Delay( SAMPLE_PERIOD_MS );
     /* USER CODE END WHILE */
 
@@ -612,24 +615,32 @@ static void convert_data_to_messages_and_queue(void)
 /*
  * Feedback
  */
-static void add_to_error_log( float error )
-{
-	if( !error_log_is_full )
-	{
-	    error_log[error_log_idx++] = error;
-	}
 
-	if ( ERROR_LOG_LENGTH == error_log_idx )
+
+static void calculate_error_from_set_point( float* dest, uint32_t dest_size, float* src, uint32_t src_size, float set_point )
+{
+	assert( NULL != dest );
+	assert( NULL != src );
+	assert( dest_size == src_size );
+	for(uint32_t idx = 0u; idx < src_size; idx++)
 	{
-		error_log_is_full = true;
+		dest[idx] = set_point - src[idx];
 	}
 }
 
 
 static float calculate_duty_cycle_from_error( float error )
 {
-	assert( MAX_ERROR >= error );
-	return ( error / MAX_ERROR );
+	float duty_cycle = 0.0f;
+	if( MAX_ERROR == error )
+	{
+		duty_cycle = 1.00f;
+	}
+	else
+	{
+		duty_cycle = ( error / MAX_ERROR );
+	}
+	return duty_cycle;
 }
 
 
