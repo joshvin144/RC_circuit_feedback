@@ -35,16 +35,17 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+#define TEST_MODE
 #define USE_FULL_ASSERT
 
-#define DEFAULT_TIMEOUT ( 10000u )
-#define USART2_TIMEOUT DEFAULT_TIMEOUT
+#define SAMPLE_PERIOD_MS ( 10u )
+#define ADC_TIMEOUT_MS ( 1u )
+
+#define DEFAULT_TIMEOUT_MS ( 10000u )
+#define USART2_TIMEOUT_MS DEFAULT_TIMEOUT_MS
 
 #define MESSAGE_LENGTH ( 6u )
 #define MESSAGE_QUEUE_LENGTH ( 256u )
-
-#define ADC_BUFFER_DOWNSAMPLED_LENGTH ( 256u )
-#define DOWNSAMPLE_FACTOR ( 16u )
 
 #define ERROR_LOG_LENGTH ( 256u )
 #define DERIVATIVE_LOG_LENGTH ( 256u )
@@ -58,7 +59,6 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
-DMA_HandleTypeDef hdma_adc1;
 
 TIM_HandleTypeDef htim1;
 
@@ -71,9 +71,14 @@ static uint32_t message_queue_length = 0u;
 static bool queue_is_full = false;
 static bool queue_is_loaded = false;
 
+// ADC Buffer
 uint16_t adc1_buffer[ADC_BUFFER_LENGTH] = {0};
-uint16_t adc1_buffer_downsampled[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0};
-float adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH] = {0.0f};
+uint32_t adc1_buffer_idx = 0u;
+bool adc1_buffer_is_full = false;
+
+// Voltage values
+float adc1_voltage[ADC_BUFFER_LENGTH] = {0.0f};
+
 // If an RTOS was implemented, this may be replaced with a Semaphore
 bool data_to_process = false;
 
@@ -104,7 +109,6 @@ float k_proportion = 100.0f;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
@@ -125,7 +129,8 @@ static void empty_queue(void);
  * ADC1
  */
 
-static void downsample_adc1_buffer(void);
+static uint16_t poll_adc(void);
+static void add_to_adc_buffer(uint16_t conversion_result);
 static void process_adc_output_codes(void);
 static void convert_data_to_messages_and_queue(void);
 
@@ -171,7 +176,6 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
@@ -180,18 +184,10 @@ int main(void)
   // Initialize data structures in the ADC module
   adc_init_adc_module();
 
-  // Start DMA
-  // The DMA will fill this buffer in the background
-  // When the buffer fills, the DMA will fire an interrupt
-  // In the ISR, it is time to read out the buffer
-  // In the ISR, set a flag that there is data to process
-  // In the main, process the data
-  // Once processed, clear the flag
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc1_buffer, ADC_BUFFER_LENGTH);
-
   // Start PWM
   HAL_StatusTypeDef status = HAL_TIM_PWM_Start( &htim1, TIM_CHANNEL_1 );
   assert( HAL_OK == status );
+
 #ifdef TEST_MODE
   TIM1->CCR1 = pwm_calculate_CCRx( PWM_DUTY_CYCLE, PWM_ARRX );
 #endif
@@ -205,13 +201,12 @@ int main(void)
 	if( data_to_process )
 	{
 		// Sampling
-		downsample_adc1_buffer();
 		process_adc_output_codes();
 		data_to_process = false;
 
 #ifndef TEST_MODE
 		// Feedback
-		sample_voltage = adc1_voltage[ADC_BUFFER_DOWNSAMPLED_LENGTH - 1u];
+		sample_voltage = adc1_voltage[ADC_BUFFER_LENGTH - 1u];
 		error = ( set_point_voltage - sample_voltage );
 		add_to_error_log( error );
 		integral = math_helpers_trapezoid_approximation( error_log, error_log_idx );
@@ -231,6 +226,10 @@ int main(void)
 		empty_queue();
 		queue_is_loaded = false;
 	}
+
+	uint16_t conversion_result = poll_adc();
+	add_to_adc_buffer( conversion_result );
+	HAL_Delay( SAMPLE_PERIOD_MS );
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -319,7 +318,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
   hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   hadc1.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -467,22 +466,6 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -540,7 +523,7 @@ static void queue_message(char* message, uint32_t message_length)
 static HAL_StatusTypeDef dispatch_message_from_huart2(char* message, uint32_t message_length)
 {
 	HAL_StatusTypeDef status = HAL_OK;
-	status = HAL_UART_Transmit(&huart2, (uint8_t*) message, message_length, USART2_TIMEOUT);
+	status = HAL_UART_Transmit(&huart2, (uint8_t*) message, message_length, USART2_TIMEOUT_MS);
 	return status;
 }
 
@@ -553,6 +536,8 @@ static void empty_queue(void)
 		status = dispatch_message_from_huart2(message_queue[i], MESSAGE_LENGTH);
 		assert( HAL_OK == status );
 	}
+
+	// Reset message queue
 	message_queue_length = 0u;
 	queue_is_full = false;
 }
@@ -563,21 +548,43 @@ static void empty_queue(void)
  */
 
 
-static void downsample_adc1_buffer(void)
+static uint16_t poll_adc(void)
 {
-	for( uint32_t i = 0u; i < ADC_BUFFER_LENGTH; i += DOWNSAMPLE_FACTOR )
+	HAL_StatusTypeDef status = HAL_ADC_Start( &hadc1 );
+	assert( HAL_OK == status );
+	status = HAL_ADC_PollForConversion( &hadc1, ADC_TIMEOUT_MS );
+	assert( HAL_OK == status );
+	uint16_t conversion_result = ( uint16_t ) HAL_ADC_GetValue( &hadc1 );
+	status = HAL_ADC_Stop( &hadc1 );
+	return conversion_result;
+}
+
+
+static void add_to_adc_buffer(uint16_t conversion_result)
+{
+	if ( !adc1_buffer_is_full )
 	{
-		adc1_buffer_downsampled[i/DOWNSAMPLE_FACTOR] = adc1_buffer[i];
+	    adc1_buffer[adc1_buffer_idx++] = conversion_result;
+	}
+
+	if ( ADC_BUFFER_LENGTH == adc1_buffer_idx )
+	{
+		adc1_buffer_is_full = true;
+		data_to_process = true;
 	}
 }
 
 
 static void process_adc_output_codes(void)
 {
-	for( uint32_t i = 0u; i < ADC_BUFFER_DOWNSAMPLED_LENGTH; i++ )
+	for( uint32_t i = 0u; i < ADC_BUFFER_LENGTH; i++ )
 	{
-		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer_downsampled[i] );
+		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer[i] );
 	}
+
+	// Reset adc1_buffer
+	adc1_buffer_idx = 0u;
+	adc1_buffer_is_full = false;
 }
 
 
@@ -592,18 +599,6 @@ static void convert_data_to_messages_and_queue(void)
 }
 
 
-// Called when first half of buffer is filled
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
-  data_to_process = true;
-}
-
-
-// Called when buffer is completely filled
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
-  data_to_process = true;
-}
-
-
 /*
  * Feedback
  */
@@ -611,13 +606,7 @@ static void add_to_error_log( float error )
 {
 	if( !error_log_is_full )
 	{
-	    error_log[error_log_idx] = error;
-	    error_log_idx++;
-	}
-	else
-	{
-		error_log_idx = 0u;
-		error_log_is_full = false;
+	    error_log[error_log_idx++] = error;
 	}
 
 	if ( ERROR_LOG_LENGTH == error_log_idx )

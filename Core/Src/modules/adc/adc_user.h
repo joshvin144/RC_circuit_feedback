@@ -13,7 +13,7 @@
 #include "stdbool.h"
 
 
-#define ADC_BUFFER_LENGTH ( 4096u )
+#define ADC_BUFFER_LENGTH ( 256u )
 
 
 /*

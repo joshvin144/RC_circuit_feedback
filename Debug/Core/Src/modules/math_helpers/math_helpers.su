@@ -1,0 +1,6 @@
+math_helpers.c:6:7:calculate_area_rectangle	16	static
+math_helpers.c:12:7:calculate_area_triangle	16	static
+math_helpers.c:18:6:math_helpers_derivative	32	static
+math_helpers.c:33:7:math_helpers_riemman_sum_approximation	24	static
+math_helpers.c:47:7:math_helpers_trapezoid_approximation	48	static
+math_helpers.c:84:7:math_helpers_convolution_step	32	static

@@ -22,6 +22,7 @@ OBJCOPY_BIN :=
 SUBDIRS := \
 Core/Src \
 Core/Src/modules/adc \
+Core/Src/modules/math_helpers \
 Core/Src/modules/pwm \
 Core/Startup \
 Drivers/STM32L4xx_HAL_Driver/Src \
