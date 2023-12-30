@@ -25,7 +25,8 @@
 #include "config.h"
 #include "pwm_user.h"
 #include "adc_user.h"
-#include "math_helpers_user.h"
+#include "messaging_user.h"
+#include "pid_controller_user.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,18 +38,6 @@
 /* USER CODE BEGIN PD */
 
 #define SAMPLE_PERIOD_MS ( 1u )
-#define ADC_TIMEOUT_MS ( 1u )
-
-#define DEFAULT_TIMEOUT_MS ( 10000u )
-#define USART2_TIMEOUT_MS DEFAULT_TIMEOUT_MS
-
-#define MESSAGE_LENGTH ( 6u )
-#define MESSAGE_QUEUE_LENGTH ADC_BUFFER_LENGTH
-
-#define ERROR_LOG_LENGTH ADC_BUFFER_LENGTH
-#define DERIVATIVE_LOG_LENGTH ( ADC_BUFFER_LENGTH - 1u )
-#define MAX_ERROR ( 921.6f )
-#define TOLERANCE ( 0.1f )
 
 /* USER CODE END PD */
 
@@ -66,43 +55,19 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-static char message_queue[MESSAGE_QUEUE_LENGTH][MESSAGE_LENGTH] = {0};
-static uint32_t message_queue_length = 0u;
-static bool queue_is_full = false;
-static bool queue_is_loaded = false;
-
-// ADC Buffer
-uint16_t adc1_buffer[ADC_BUFFER_LENGTH] = {0};
-uint32_t adc1_buffer_idx = 0u;
-bool adc1_buffer_is_full = false;
-
 // Voltage values
 float adc1_voltage[ADC_BUFFER_LENGTH] = {0.0f};
 
 // If an RTOS was implemented, this may be replaced with a Semaphore
-bool data_to_process = false;
+static bool data_to_process = false;
 
-float adjusted_duty_cycle = 0.0f;
+// Set when the ADC data has been processed
+static bool queue_is_loaded = false;
+
 // The voltage to achieve across the capacitor
-float set_point_voltage = 3.6f;
-float sample_voltage = 0.0f;
-
-// Error
-float error = 0.0f;
-float error_log[ERROR_LOG_LENGTH] = {0.0f};
-
-// More error terms
-float integral = 0.0f;
-float derivative = 0.0f;
-float composite = 0.0f;
-
-// Derivative specific
-float derivative_log[DERIVATIVE_LOG_LENGTH] = {0.0f};
-
-// Weights
-float k_integral = 3.0f;
-float k_derivative = 3.0f;
-float k_proportion = 1.0f;
+float set_point = 3.6f;
+float composite_term = 0.0f;
+float adjusted_duty_cycle = 0.0f;
 
 /* USER CODE END PV */
 
@@ -114,32 +79,7 @@ static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
-
-/*
- * HUART2
- */
-
-static void prepare_message(char* message, uint32_t message_length, float data);
-static void queue_message(char* message, uint32_t message_length);
-static HAL_StatusTypeDef dispatch_message_from_huart2(char* message, uint32_t message_length);
-static void empty_queue(void);
-
-
-/*
- * ADC1
- */
-
-static uint16_t poll_adc(void);
-static void add_to_adc_buffer(uint16_t conversion_result);
-static void process_adc_output_codes(void);
-static void convert_data_to_messages_and_queue(void);
-
-/*
- * Feedback
- */
-static void calculate_error_from_set_point(float*, uint32_t, float*, uint32_t, float);
-static float calculate_duty_cycle_from_error(float);
-
+static float calculate_duty_cycle_from_error( float error );
 
 /* USER CODE END PFP */
 
@@ -201,43 +141,30 @@ int main(void)
 	if( data_to_process )
 	{
 		// Sampling
-		process_adc_output_codes();
+		process_adc_output_codes( adc1_voltage, ADC_BUFFER_LENGTH );
 		data_to_process = false;
 
 #ifndef TEST_MODE
-		// Calculate the residual error term
-		calculate_error_from_set_point( error_log, ERROR_LOG_LENGTH, adc1_voltage, ADC_BUFFER_LENGTH, set_point_voltage );
-
-		// Compute the integral term
-		integral = math_helpers_trapezoid_approximation( error_log, ERROR_LOG_LENGTH );
-
-		// Compute the derivative term
-		math_helpers_derivative( derivative_log, DERIVATIVE_LOG_LENGTH, adc1_voltage, ADC_BUFFER_LENGTH );
-
-		// Assign intermediary variables
-		error = error_log[ERROR_LOG_LENGTH - 1u];
-		derivative = derivative_log[DERIVATIVE_LOG_LENGTH - 1u];
-		composite = ( k_proportion * error ) + ( k_integral * integral ) - ( k_derivative * derivative );
-
 		// Calculate and set duty cycle from the composite error term
-		adjusted_duty_cycle = calculate_duty_cycle_from_error( composite );
+		composite_term = calculate_composite( adc1_voltage, ADC_BUFFER_LENGTH, set_point );
+		adjusted_duty_cycle = calculate_duty_cycle_from_error( composite_term );
 		TIM1->CCR1 = pwm_calculate_CCRx( adjusted_duty_cycle, PWM_ARRX );
 #endif
 
 		// Data transfer
-		convert_data_to_messages_and_queue();
+		convert_data_to_messages_and_queue( adc1_voltage, ADC_BUFFER_LENGTH );
 		queue_is_loaded = true;
 	}
 
 	if( queue_is_loaded )
 	{
-		empty_queue();
+		empty_queue( &huart2 );
 		queue_is_loaded = false;
 	}
 
 	// Poll the ADC
-	uint16_t conversion_result = poll_adc();
-	add_to_adc_buffer( conversion_result );
+	uint16_t conversion_result = poll_adc( &hadc1 );
+	data_to_process = add_to_adc_buffer( conversion_result );
 
 	// Wait until the next sample time
 	HAL_Delay( SAMPLE_PERIOD_MS );
@@ -491,140 +418,9 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-
-/*
- * HUART2
- */
-
-
-static void prepare_message(char* message, uint32_t message_length, float data)
-{
-	// Only accept values below 10.0f
-	float dividend = data / ( 10.0f );
-	assert( dividend < 10.0f );
-
-	// Copy the data
-	int sprintf_return = sprintf(message, "%.3f,", data);
-	assert(sprintf_return == message_length);
-}
-
-
-static void queue_message(char* message, uint32_t message_length)
-{
-	/*
-	 * TODO: Currently, there is a mismatch in timing between adding messages to the queue and emptying the queue
-	 * If the queue is not emptied before adding more messages, a Hard Fault will occur.
-	 * Therefore, queue_is_full was added.
-	 * If the queue_is_full, another message cannot be added.
-	 * queue_is_full will be reset the next time that the queue is emptied.
-	 */
-	if( !queue_is_full )
-	{
-		memcpy(message_queue[message_queue_length], message, message_length);
-		message_queue_length++;
-	}
-
-	if( message_queue_length == ( MESSAGE_QUEUE_LENGTH - 1 ) )
-	{
-		queue_is_full = true;
-	}
-}
-
-
-static HAL_StatusTypeDef dispatch_message_from_huart2(char* message, uint32_t message_length)
-{
-	HAL_StatusTypeDef status = HAL_OK;
-	status = HAL_UART_Transmit(&huart2, (uint8_t*) message, message_length, USART2_TIMEOUT_MS);
-	return status;
-}
-
-
-static void empty_queue(void)
-{
-	HAL_StatusTypeDef status = HAL_OK;
-	for( uint32_t i = 0u; i < message_queue_length; i++ )
-	{
-		status = dispatch_message_from_huart2(message_queue[i], MESSAGE_LENGTH);
-		assert( HAL_OK == status );
-	}
-
-	// Reset message queue
-	message_queue_length = 0u;
-	queue_is_full = false;
-}
-
-
-/*
- * ADC1
- */
-
-
-static uint16_t poll_adc(void)
-{
-	HAL_StatusTypeDef status = HAL_ADC_Start( &hadc1 );
-	assert( HAL_OK == status );
-	status = HAL_ADC_PollForConversion( &hadc1, ADC_TIMEOUT_MS );
-	assert( HAL_OK == status );
-	uint16_t conversion_result = ( uint16_t ) HAL_ADC_GetValue( &hadc1 );
-	status = HAL_ADC_Stop( &hadc1 );
-	return conversion_result;
-}
-
-
-static void add_to_adc_buffer(uint16_t conversion_result)
-{
-	if ( !adc1_buffer_is_full )
-	{
-	    adc1_buffer[adc1_buffer_idx++] = conversion_result;
-	}
-
-	if ( ADC_BUFFER_LENGTH == adc1_buffer_idx )
-	{
-		adc1_buffer_is_full = true;
-		data_to_process = true;
-	}
-}
-
-
-static void process_adc_output_codes(void)
-{
-	for( uint32_t i = 0u; i < ADC_BUFFER_LENGTH; i++ )
-	{
-		adc1_voltage[i] = adc_calculate_voltage_from_output_code( (uint32_t) adc1_buffer[i] );
-	}
-
-	// Reset adc1_buffer
-	adc1_buffer_idx = 0u;
-	adc1_buffer_is_full = false;
-}
-
-
-static void convert_data_to_messages_and_queue(void)
-{
-	char message[MESSAGE_LENGTH];
-	for( uint32_t i = 0u; i < MESSAGE_QUEUE_LENGTH; i++ )
-	{
-		prepare_message(message, MESSAGE_LENGTH, adc1_voltage[i]);
-		queue_message(message, MESSAGE_LENGTH);
-	}
-}
-
-
 /*
  * Feedback
  */
-
-
-static void calculate_error_from_set_point( float* dest, uint32_t dest_size, float* src, uint32_t src_size, float set_point )
-{
-	assert( NULL != dest );
-	assert( NULL != src );
-	assert( dest_size == src_size );
-	for(uint32_t idx = 0u; idx < src_size; idx++)
-	{
-		dest[idx] = set_point - src[idx];
-	}
-}
 
 
 static float calculate_duty_cycle_from_error( float error )
