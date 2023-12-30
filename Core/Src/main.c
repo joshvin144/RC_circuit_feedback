@@ -102,7 +102,7 @@ float composite = 0.0f;
 float derivative_log[DERIVATIVE_LOG_LENGTH] = {0.0f};
 
 // Weights
-float k_integral = 1.0f;
+float k_integral = 3.0f;
 float k_derivative = 3.0f;
 float k_proportion = 1.0f;
 

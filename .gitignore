@@ -1,0 +1,11 @@
+
+
+# Ignore generated object files
+*.o
+
+# Ignore generated executable files
+*.exe
+
+# Ignore DS_Store
+*/.DS_Store
+
