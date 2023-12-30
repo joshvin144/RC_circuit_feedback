@@ -22,6 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "config.h"
 #include "pwm_user.h"
 #include "adc_user.h"
 #include "math_helpers_user.h"
@@ -34,9 +35,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-//#define TEST_MODE
-#define USE_FULL_ASSERT
 
 #define SAMPLE_PERIOD_MS ( 1u )
 #define ADC_TIMEOUT_MS ( 1u )
